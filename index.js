@@ -7,7 +7,8 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const TOKEN = process.env.TOKEN;
+const TOKEN_FACTILIZA = process.env.TOKEN_FACTILIZA;
+const TOKEN_LEDER = process.env.TOKEN_LEDER;
 
 app.use(cors());
 app.use(express.json());
@@ -16,9 +17,7 @@ app.use(express.json());
    Funciones auxiliares
 ============================ */
 
-/**
- * Consulta a Factiliza
- */
+/** Consulta a Factiliza (GET directo) */
 const getFromFactiliza = async (endpointPath, res) => {
   try {
     const url = `https://api.factiliza.com/v1${endpointPath}`;
@@ -26,7 +25,7 @@ const getFromFactiliza = async (endpointPath, res) => {
 
     const response = await axios.get(url, {
       headers: {
-        Authorization: `Bearer ${TOKEN}`,
+        Authorization: `Bearer ${TOKEN_FACTILIZA}`,
         "Content-Type": "application/json",
       },
     });
@@ -42,15 +41,16 @@ const getFromFactiliza = async (endpointPath, res) => {
   }
 };
 
-/**
- * Consulta a Leder Data (siempre POST)
- */
+/** Consulta a Leder Data (GET → POST) */
 const postToLederData = async (endpointPath, payload, res) => {
   try {
     const url = `https://leder-data-api.ngrok.dev/v1.7${endpointPath}`;
     console.log("🔗 LederData:", url, payload);
 
-    const response = await axios.post(url, { ...payload, token: TOKEN });
+    const response = await axios.post(url, {
+      ...payload,
+      token: TOKEN_LEDER,
+    });
 
     return res.status(200).json(response.data);
   } catch (err) {
@@ -64,7 +64,7 @@ const postToLederData = async (endpointPath, payload, res) => {
 };
 
 /* ============================
-   Factiliza Endpoints (GET)
+   Endpoints Factiliza (7 básicos)
 ============================ */
 app.get("/dni", (req, res) => {
   if (!req.query.dni)
@@ -109,7 +109,7 @@ app.get("/licencia", (req, res) => {
 });
 
 /* ============================
-   Leder Data Endpoints (GET → POST)
+   Endpoints LederData (23 avanzados)
 ============================ */
 app.get("/reniec", (req, res) => {
   postToLederData("/persona/reniec", {
@@ -212,7 +212,7 @@ app.get("/fiscalia-nombres", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "🚀 API Consulta pe-clon funcionando correctamente con Factiliza + Leder Data",
+    message: "🚀 API Consulta PE lista con Factiliza + LederData (30 endpoints)",
   });
 });
 
