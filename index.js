@@ -22,6 +22,7 @@ app.use(express.json());
 /**
  * Guarda el resultado exitoso de la consulta en la base de datos de logs (asíncrono).
  * Esta función NO bloquea el flujo de la respuesta principal.
+ * Se mantiene la función original de LOG (POST) para registrar el evento de consulta.
  */
 const logSuccessfulQuery = async (endpoint, queryParams, resultData) => {
   // Usamos una ruta genérica para loguear todas las consultas
@@ -46,18 +47,38 @@ const logSuccessfulQuery = async (endpoint, queryParams, resultData) => {
 };
 
 
-/** * Guarda cualquier dato en la API dinámica /guardar/:tipo (asíncrono).
- * La data debe ser un objeto JSON.
+/** * Guarda cualquier dato en la API dinámica /guardar/:tipo usando el método GET.
+ * La data debe ser un objeto JSON (key: value) que se convierte a query string.
+ * **Esta es la función actualizada que reemplaza al POST anterior.**
  */
 const saveDynamicData = async (dataType, data) => {
-  const url = `${DATABASE_LOG_API}/guardar/${dataType}`;
+  // Construye la URL base: https://base-datos-consulta-pe.fly.dev/guardar/<tipo>
+  let url = `${DATABASE_LOG_API}/guardar/${dataType}`;
   
+  // 1. Convierte el objeto de datos a un array de pares [clave, valor]
+  const params = Object.entries(data);
+  
+  // 2. Si hay datos, construye la query string
+  if (params.length > 0) {
+    // Mapea cada par a 'clave=valor' y une con '&'
+    const queryString = params
+      .map(([key, value]) => {
+        // Codifica la clave y el valor para que sea seguro en la URL
+        const encodedKey = encodeURIComponent(key);
+        // Convierte el valor a cadena y lo codifica
+        const encodedValue = encodeURIComponent(String(value)); 
+        return `${encodedKey}=${encodedValue}`;
+      })
+      .join('&');
+
+    // Agrega el separador '?' y la query string a la URL
+    url += `?${queryString}`;
+  }
+
   try {
-    console.log(`💾 Intentando guardar data dinámica de tipo '${dataType}'...`);
-    // Usamos axios para la llamada POST
-    await axios.post(url, data, {
-      headers: { "Content-Type": "application/json" }
-    });
+    console.log(`💾 Intentando guardar data dinámica de tipo '${dataType}' con GET...`);
+    // Usamos axios para la llamada GET
+    await axios.get(url);
     console.log(`✅ Guardado dinámico exitoso para tipo: ${dataType}`);
   } catch (err) {
     // Captura el error de guardado. NO interrumpe la respuesta al cliente.
@@ -67,7 +88,6 @@ const saveDynamicData = async (dataType, data) => {
 
 
 /** Consulta a Leder Data (GET → POST) */
-// Se modificó para recibir 'req', 'lederDataPath' y 'payload'
 const postToLederData = async (req, res, lederDataPath, payload) => {
   try {
     const url = `https://leder-data-api.ngrok.dev/v1.7${lederDataPath}`;
@@ -80,14 +100,14 @@ const postToLederData = async (req, res, lederDataPath, payload) => {
 
     const resultData = response.data;
 
-    // --- PASO CLAVE 1: Logueo asíncrono del resultado exitoso ---
+    // --- PASO CLAVE 1: Logueo asíncrono del resultado exitoso (POST) ---
     // Clonamos el payload y eliminamos el token antes de loguear los parámetros
     const queryParams = { ...payload };
     delete queryParams.token;
     
     logSuccessfulQuery(req.path, queryParams, resultData);
     
-    // --- PASO CLAVE 2: Guardado dinámico asíncrono del resultado exitoso ---
+    // --- PASO CLAVE 2: Guardado dinámico asíncrono del resultado exitoso (GET) ---
     
     // Se define el tipo de data a guardar basado en la ruta (endpoint)
     let dataType;
@@ -135,7 +155,19 @@ const postToLederData = async (req, res, lederDataPath, payload) => {
     }
 
     // Llamamos a la función de guardado con el tipo y la data
-    saveDynamicData(dataType, resultData);
+    // Nota: Si el resultado de la API es un array, es mejor pasar un objeto para el guardado
+    // Por simplicidad y consistencia, asumimos que 'resultData' es un objeto o contiene las claves necesarias.
+    // Si 'resultData' no es un objeto, podría ser necesario modificarlo aquí.
+    if (typeof resultData === 'object' && resultData !== null && !Array.isArray(resultData)) {
+      saveDynamicData(dataType, resultData);
+    } else if (Array.isArray(resultData) && resultData.length > 0 && typeof resultData[0] === 'object') {
+      // Si es un array de objetos, guardamos solo el primer elemento por simplicidad.
+      // Se recomienda ajustar esta lógica si se necesita guardar todo el array.
+      saveDynamicData(dataType, resultData[0]);
+    } else {
+      // Si el resultado es una estructura no esperada para el guardado (e.g., solo un string o número)
+      console.log(`⚠️ Resultado no apto para guardado dinámico de tipo ${dataType}:`, typeof resultData);
+    }
     // -----------------------------------------------------------
 
     return res.status(200).json(resultData);
@@ -305,7 +337,7 @@ app.get("/fiscalia-nombres", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "🚀 API Consulta PE lista solo con LederData (23 endpoints), Logueo y Guardado Dinámico Activado",
+    message: "🚀 API Consulta PE lista solo con LederData (23 endpoints), Logueo (POST) y Guardado Dinámico (GET) Activado",
   });
 });
 
