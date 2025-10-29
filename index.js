@@ -49,7 +49,7 @@ const logSuccessfulQuery = async (endpoint, queryParams, resultData) => {
 
 /** * Guarda cualquier dato en la API dinámica /guardar/:tipo usando el método GET.
  * La data debe ser un objeto JSON (key: value) que se convierte a query string.
- * **Esta es la función actualizada que reemplaza al POST anterior.**
+ * Se corrige la conversión de objetos anidados a cadena para evitar "[object Object]".
  */
 const saveDynamicData = async (dataType, data) => {
   // Construye la URL base: https://base-datos-consulta-pe.fly.dev/guardar/<tipo>
@@ -63,10 +63,20 @@ const saveDynamicData = async (dataType, data) => {
     // Mapea cada par a 'clave=valor' y une con '&'
     const queryString = params
       .map(([key, value]) => {
+        let valueToEncode;
+
+        // **CORRECCIÓN CLAVE:** Si el valor es un objeto o array, lo convertimos a cadena JSON.
+        if (typeof value === 'object' && value !== null) {
+            valueToEncode = JSON.stringify(value);
+        } else {
+            // Para primitivos, convertimos a cadena normal.
+            valueToEncode = String(value);
+        }
+
         // Codifica la clave y el valor para que sea seguro en la URL
         const encodedKey = encodeURIComponent(key);
-        // Convierte el valor a cadena y lo codifica
-        const encodedValue = encodeURIComponent(String(value)); 
+        const encodedValue = encodeURIComponent(valueToEncode); 
+        
         return `${encodedKey}=${encodedValue}`;
       })
       .join('&');
@@ -155,15 +165,16 @@ const postToLederData = async (req, res, lederDataPath, payload) => {
     }
 
     // Llamamos a la función de guardado con el tipo y la data
-    // Nota: Si el resultado de la API es un array, es mejor pasar un objeto para el guardado
-    // Por simplicidad y consistencia, asumimos que 'resultData' es un objeto o contiene las claves necesarias.
-    // Si 'resultData' no es un objeto, podría ser necesario modificarlo aquí.
-    if (typeof resultData === 'object' && resultData !== null && !Array.isArray(resultData)) {
-      saveDynamicData(dataType, resultData);
-    } else if (Array.isArray(resultData) && resultData.length > 0 && typeof resultData[0] === 'object') {
-      // Si es un array de objetos, guardamos solo el primer elemento por simplicidad.
-      // Se recomienda ajustar esta lógica si se necesita guardar todo el array.
-      saveDynamicData(dataType, resultData[0]);
+    // Si la respuesta es un array de resultados, guardamos solo el primer objeto.
+    // Si la respuesta es un objeto (lo más común), guardamos el objeto completo.
+    if (typeof resultData === 'object' && resultData !== null) {
+      if (Array.isArray(resultData) && resultData.length > 0 && typeof resultData[0] === 'object') {
+        saveDynamicData(dataType, resultData[0]);
+      } else if (!Array.isArray(resultData)) {
+        saveDynamicData(dataType, resultData);
+      } else {
+        console.log(`⚠️ Array vacío o contenido no objeto para guardado dinámico de tipo ${dataType}.`);
+      }
     } else {
       // Si el resultado es una estructura no esperada para el guardado (e.g., solo un string o número)
       console.log(`⚠️ Resultado no apto para guardado dinámico de tipo ${dataType}:`, typeof resultData);
@@ -180,12 +191,6 @@ const postToLederData = async (req, res, lederDataPath, payload) => {
     });
   }
 };
-
-
-/* ============================
-   Endpoints Factiliza (7 básicos)
-   (ELIMINADOS)
-============================ */
 
 
 /* ============================
