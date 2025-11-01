@@ -3,97 +3,137 @@ import cors from "cors";
 import dotenv from "dotenv";
 import axios from "axios";
 
+// Carga las variables de entorno desde .env
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Variables de configuración de la API externa
 const TOKEN_LEDER = process.env.TOKEN_LEDER;
 
-// URL de la base de datos de log/guardado
-const DATABASE_LOG_API = "https://base-datos-consulta-pe.fly.dev";
+// Variables de configuración de GitHub para el guardado de resultados
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+// GITHUB_REPO debe estar en formato "dueño/repositorio", e.g., "miusuario/mis-datos"
+const GITHUB_REPO = process.env.GITHUB_REPO; 
+const GITHUB_API_URL = "https://api.github.com";
+const PUBLIC_DIR = "public"; // La ruta donde se guardarán los archivos JSON
+
+// Mapa para asociar la ruta de Express con el nombre del archivo JSON
+const FILENAME_MAP = {
+    "/reniec": "dni.json",
+    "/denuncias-dni": "denuncias_dni.json",
+    "/sueldos": "sueldos.json",
+    "/trabajos": "trabajos.json",
+    "/sunat": "sunat_ruc.json",
+    "/sunat-razon": "sunat_razon.json",
+    "/consumos": "consumos.json",
+    "/arbol": "arbol.json",
+    "/familia1": "familia1.json",
+    "/familia2": "familia2.json",
+    "/familia3": "familia3.json",
+    "/movimientos": "movimientos.json",
+    "/matrimonios": "matrimonios.json",
+    "/empresas": "empresas.json",
+    "/direcciones": "direcciones.json",
+    "/correos": "correos.json",
+    "/telefonia-doc": "telefonia_documento.json",
+    "/telefonia-num": "telefonia_numero.json",
+    "/vehiculos": "vehiculos.json",
+    "/fiscalia-dni": "fiscalia_dni.json",
+    "/fiscalia-nombres": "fiscalia_nombres.json",
+    "/denuncias-placa": "denuncias_placa.json",
+};
 
 app.use(cors());
 app.use(express.json());
 
 /* ============================
-   Funciones auxiliares
+   Funciones auxiliares de GitHub
 ============================ */
 
 /**
- * Guarda el resultado exitoso de la consulta en la base de datos de logs (asíncrono).
- * Esta función NO bloquea el flujo de la respuesta principal.
- * Se mantiene la función original de LOG (POST) para registrar el evento de consulta.
+ * Guarda el resultado de la consulta en un archivo JSON en GitHub.
+ *
+ * @param {string} filename El nombre del archivo JSON (e.g., 'dni.json').
+ * @param {object} newData El objeto de resultado a guardar.
+ * @param {string} apiPath La ruta de la API consultada (para el mensaje de commit).
+ * @param {object} queryParams Los parámetros de la consulta original.
  */
-const logSuccessfulQuery = async (endpoint, queryParams, resultData) => {
-  // Usamos una ruta genérica para loguear todas las consultas
-  const url = `${DATABASE_LOG_API}/guardar_consulta`;
-  
-  try {
-    // console.log(`⏳ Intentando guardar log para ${endpoint}...`);
-    // Usamos axios para la llamada POST
-    await axios.post(url, {
-      endpoint: endpoint,     // Ruta de Express (e.g., /reniec)
-      queryParams: queryParams, // Parámetros originales de la consulta
-      resultado: resultData,    // El resultado exitoso de la API externa
-    }, {
-      headers: { "Content-Type": "application/json" }
-    });
-    // console.log(`✅ Log exitoso para ${endpoint}`);
-  } catch (err) {
-    // Captura el error de logueo. Es crucial que el error de log NO interrumpa 
-    // el envío de la respuesta al cliente.
-    console.error(`⚠️ Error al guardar log en la BD para ${endpoint}:`, err.message);
-  }
-};
+const saveResultToGithub = async (filename, newData, apiPath, queryParams) => {
+    if (!GITHUB_TOKEN || !GITHUB_REPO) {
+        console.error("⚠️ Variables GITHUB_TOKEN o GITHUB_REPO no configuradas. Saltando guardado en GitHub.");
+        return;
+    }
 
+    const filePath = `${PUBLIC_DIR}/${filename}`;
+    const url = `${GITHUB_API_URL}/repos/${GITHUB_REPO}/contents/${filePath}`;
+    const commitMessage = `💾 Guardado automático de consulta ${apiPath}`;
+    
+    // Objeto que se añadirá al array JSON del archivo
+    const entryToSave = {
+        timestamp: new Date().toISOString(),
+        queryParams: queryParams,
+        result: newData,
+    };
 
-/** * Guarda cualquier dato en la API dinámica /guardar/:tipo usando el método GET.
- * La data debe ser un objeto JSON (key: value) que se convierte a query string.
- * Se corrige la conversión de objetos anidados a cadena para evitar "[object Object]".
- */
-const saveDynamicData = async (dataType, data) => {
-  // Construye la URL base: https://base-datos-consulta-pe.fly.dev/guardar/<tipo>
-  let url = `${DATABASE_LOG_API}/guardar/${dataType}`;
-  
-  // 1. Convierte el objeto de datos a un array de pares [clave, valor]
-  const params = Object.entries(data);
-  
-  // 2. Si hay datos, construye la query string
-  if (params.length > 0) {
-    // Mapea cada par a 'clave=valor' y une con '&'
-    const queryString = params
-      .map(([key, value]) => {
-        let valueToEncode;
+    let existingContent = [];
+    let sha = null;
+    let currentBranch = 'main'; // Asumimos 'main' como la rama por defecto
 
-        // **CORRECCIÓN CLAVE:** Si el valor es un objeto o array, lo convertimos a cadena JSON.
-        if (typeof value === 'object' && value !== null) {
-            valueToEncode = JSON.stringify(value);
-        } else {
-            // Para primitivos, convertimos a cadena normal.
-            valueToEncode = String(value);
+    try {
+        // 1. Intentar obtener el contenido actual del archivo (para obtener el SHA)
+        const getResponse = await axios.get(url, {
+            headers: { Authorization: `token ${GITHUB_TOKEN}` },
+        });
+
+        sha = getResponse.data.sha;
+        const contentBase64 = getResponse.data.content.replace(/\n/g, "");
+        const contentJsonString = Buffer.from(contentBase64, 'base64').toString('utf8');
+        
+        // El contenido siempre debe ser un array
+        existingContent = JSON.parse(contentJsonString);
+        if (!Array.isArray(existingContent)) {
+            existingContent = [];
+            console.warn(`⚠️ El archivo ${filename} existe, pero no es un array JSON. Se reinicia.`);
         }
 
-        // Codifica la clave y el valor para que sea seguro en la URL
-        const encodedKey = encodeURIComponent(key);
-        const encodedValue = encodeURIComponent(valueToEncode); 
+    } catch (error) {
+        // Si el archivo no existe (error 404), 'sha' se mantiene en null y 'existingContent' es []
+        if (error.response && error.response.status === 404) {
+            console.log(`✨ Creando archivo nuevo: ${filePath}`);
+        } else {
+            console.error(`⚠️ Error al leer el archivo ${filePath} de GitHub:`, error.message);
+            // No continuar si hubo un error al leer y no fue 404
+            return; 
+        }
+    }
+
+    // 2. Agregar el nuevo resultado
+    existingContent.push(entryToSave);
+    const newContentJsonString = JSON.stringify(existingContent, null, 2);
+    const newContentBase64 = Buffer.from(newContentJsonString).toString('base64');
+    
+    // 3. Crear el payload para el PUT (commit)
+    const commitPayload = {
+        message: commitMessage,
+        content: newContentBase64,
+        sha: sha, // Se incluye solo si estamos actualizando un archivo existente
+        branch: currentBranch,
+    };
+
+    try {
+        console.log(`⏳ Subiendo commit para ${filePath}...`);
         
-        return `${encodedKey}=${encodedValue}`;
-      })
-      .join('&');
+        // 4. Subir el nuevo contenido (PUT)
+        await axios.put(url, commitPayload, {
+            headers: { Authorization: `token ${GITHUB_TOKEN}` },
+        });
 
-    // Agrega el separador '?' y la query string a la URL
-    url += `?${queryString}`;
-  }
-
-  try {
-    console.log(`💾 Intentando guardar data dinámica de tipo '${dataType}' con GET...`);
-    // Usamos axios para la llamada GET
-    await axios.get(url);
-    console.log(`✅ Guardado dinámico exitoso para tipo: ${dataType}`);
-  } catch (err) {
-    // Captura el error de guardado. NO interrumpe la respuesta al cliente.
-    console.error(`⚠️ Error al guardar data dinámica para ${dataType}:`, err.response?.data || err.message);
-  }
+        console.log(`✅ Guardado en GitHub exitoso: ${filePath}`);
+    } catch (error) {
+        console.error(`❌ Error al subir el commit a GitHub para ${filePath}:`, error.response?.data?.message || error.message);
+    }
 };
 
 
@@ -101,86 +141,37 @@ const saveDynamicData = async (dataType, data) => {
 const postToLederData = async (req, res, lederDataPath, payload) => {
   try {
     const url = `https://leder-data-api.ngrok.dev/v1.7${lederDataPath}`;
-    console.log("🔗 LederData:", url, payload);
+    console.log(`🔗 LederData: ${req.path}`);
 
-    const response = await axios.post(url, {
-      ...payload,
-      token: TOKEN_LEDER,
-    });
+    // Añade el token de Leder al payload
+    const postPayload = {
+        ...payload,
+        token: TOKEN_LEDER,
+    };
+
+    const response = await axios.post(url, postPayload);
 
     const resultData = response.data;
-
-    // --- PASO CLAVE 1: Logueo asíncrono del resultado exitoso (POST) ---
-    // Clonamos el payload y eliminamos el token antes de loguear los parámetros
+    
+    // Clonamos el payload y eliminamos el token para los logs/guardado
     const queryParams = { ...payload };
     delete queryParams.token;
     
-    logSuccessfulQuery(req.path, queryParams, resultData);
+    // --- PASO CLAVE: Guardado asíncrono en GitHub ---
     
-    // --- PASO CLAVE 2: Guardado dinámico asíncrono del resultado exitoso (GET) ---
-    
-    // Se define el tipo de data a guardar basado en la ruta (endpoint)
-    let dataType;
-    switch (req.path) {
-        case "/reniec":
-            dataType = "dni";
-            break;
-        case "/denuncias-dni":
-        case "/sueldos":
-        case "/trabajos":
-        case "/consumos":
-        case "/arbol":
-        case "/familia1":
-        case "/familia2":
-        case "/familia3":
-        case "/movimientos":
-        case "/matrimonios":
-        case "/empresas":
-        case "/direcciones":
-        case "/correos":
-        case "/fiscalia-dni":
-            dataType = "persona"; // Tipo genérico para datos de DNI
-            break;
-        case "/sunat":
-        case "/sunat-razon":
-            dataType = "ruc";
-            break;
-        case "/vehiculos":
-            dataType = "placa";
-            break;
-        case "/telefonia-doc":
-            dataType = "telefono_documento";
-            break;
-        case "/telefonia-num":
-            dataType = "telefono_numero";
-            break;
-        case "/denuncias-placa":
-            dataType = "denuncias_placa";
-            break;
-        case "/fiscalia-nombres":
-            dataType = "fiscalia_nombres";
-            break;
-        default:
-            dataType = "otro"; // Tipo por defecto
+    // 1. Obtener el nombre de archivo a partir de la ruta
+    const filename = FILENAME_MAP[req.path];
+
+    if (filename) {
+        // 2. Llamar a la función de guardado en GitHub de forma asíncrona
+        saveResultToGithub(filename, resultData, req.path, queryParams);
+    } else {
+        console.warn(`⚠️ Ruta ${req.path} no mapeada para guardado en archivo.`);
     }
 
-    // Llamamos a la función de guardado con el tipo y la data
-    // Si la respuesta es un array de resultados, guardamos solo el primer objeto.
-    // Si la respuesta es un objeto (lo más común), guardamos el objeto completo.
-    if (typeof resultData === 'object' && resultData !== null) {
-      if (Array.isArray(resultData) && resultData.length > 0 && typeof resultData[0] === 'object') {
-        saveDynamicData(dataType, resultData[0]);
-      } else if (!Array.isArray(resultData)) {
-        saveDynamicData(dataType, resultData);
-      } else {
-        console.log(`⚠️ Array vacío o contenido no objeto para guardado dinámico de tipo ${dataType}.`);
-      }
-    } else {
-      // Si el resultado es una estructura no esperada para el guardado (e.g., solo un string o número)
-      console.log(`⚠️ Resultado no apto para guardado dinámico de tipo ${dataType}:`, typeof resultData);
-    }
     // -----------------------------------------------------------
 
+    // Devolver la respuesta al cliente
     return res.status(200).json(resultData);
   } catch (err) {
     console.error("❌ LederData error:", err.response?.data || err.message);
@@ -194,9 +185,9 @@ const postToLederData = async (req, res, lederDataPath, payload) => {
 
 
 /* ============================
-   Endpoints LederData (23 avanzados)
-   (Actualizados para pasar 'req' a postToLederData)
+   Endpoints LederData
 ============================ */
+// Nota: Se pasa 'req' a postToLederData para obtener la ruta y el nombre del archivo
 app.get("/reniec", (req, res) => {
   if (!req.query.dni)
     return res.status(400).json({ success: false, message: "dni requerido" });
@@ -342,7 +333,7 @@ app.get("/fiscalia-nombres", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "🚀 API Consulta PE lista solo con LederData (23 endpoints), Logueo (POST) y Guardado Dinámico (GET) Activado",
+    message: "🚀 API Consulta PE lista con LederData y Guardado Automático en GitHub Activado",
   });
 });
 
@@ -351,4 +342,5 @@ app.get("/", (req, res) => {
 ============================ */
 app.listen(PORT, () => {
   console.log(`✅ API corriendo en puerto ${PORT}`);
+  console.log(`Guardado configurado para repositorio: ${GITHUB_REPO}`);
 });
