@@ -35,5 +35,42 @@
       "developed-by": "https://t.me/lederdataoficial",
       "credits": 1557
     }
+  },
+  {
+    "timestamp": "2025-11-02T00:31:15.152Z",
+    "queryParams": {
+      "numero": "935337429"
+    },
+    "result": {
+      "message": "found data",
+      "result": {
+        "quantity": 3,
+        "coincidences": [
+          {
+            "telefono": "935337429",
+            "documento": "70079166",
+            "fuente": "MOVISTAR",
+            "plan": "",
+            "periodo": "202410"
+          },
+          {
+            "telefono": "935337429",
+            "documento": "128122123131134127133134",
+            "fuente": "CLARO",
+            "plan": "",
+            "periodo": "ONLINE"
+          },
+          {
+            "documento": "70079166",
+            "fuente": "CLARO MARZO 2019",
+            "telefono": "935337429",
+            "plan": "",
+            "periodo": ""
+          }
+        ]
+      },
+      "developed-by": "https://t.me/lederdataoficial",
+      "credits": 1555
+    }
   }
 ]
